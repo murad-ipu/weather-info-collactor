@@ -1,0 +1,7 @@
+interval_minutes: 10        # how often to fetch
+
+location:
+  name: Morioka
+  amedas_code: "33431"      # JMA AMeDAS station for Morioka
+  latitude: 39.6983         # from the JMA station table (39 deg 41.9 min)
+  longitude: 141.1650       # from the JMA station table (141 deg 9.9 min)
