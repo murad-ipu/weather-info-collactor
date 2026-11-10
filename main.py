@@ -10,14 +10,16 @@ from pathlib import Path
 import requests
 import yaml
 
-from sources import JST, fetch_amedas, fetch_open_meteo
+from sources import HEADERS, JST, TIMEOUT_SECONDS, fetch_amedas, fetch_open_meteo
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
 OUTPUT_PATH = BASE_DIR / "data" / "weather.jsonl"
+SEND_LOG_PATH = BASE_DIR / "data" / "send_failures.log"
 
 DEFAULT_CONFIG = {
     "interval_minutes": 10,
+    "ai_endpoint_url": "",
     "location": {
         "name": "Morioka",
         "amedas_code": "33431",
@@ -36,6 +38,9 @@ def load_config(path=CONFIG_PATH):
     return {
         "interval_minutes": file_config.get(
             "interval_minutes", DEFAULT_CONFIG["interval_minutes"]
+        ),
+        "ai_endpoint_url": file_config.get(
+            "ai_endpoint_url", DEFAULT_CONFIG["ai_endpoint_url"]
         ),
         "location": {**DEFAULT_CONFIG["location"], **(file_config.get("location") or {})},
     }
@@ -77,10 +82,33 @@ def collect(config):
     return record
 
 
-def save(record, path=OUTPUT_PATH):
+def append_line(path, line):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write(line + "\n")
+
+
+def save(record, path=OUTPUT_PATH):
+    append_line(path, json.dumps(record, ensure_ascii=False))
+
+
+def log_send_failure(record, reason, path=SEND_LOG_PATH):
+    """Report a failed send on the terminal and in the send log."""
+    line = f"{record['fetched_at']} data could not be sent: {reason}"
+    print(line, file=sys.stderr, flush=True)
+    try:
+        append_line(path, line)
+    except OSError as error:
+        print(f"Could not write {path}: {error}", file=sys.stderr, flush=True)
+
+
+def send_to_ai(record, url):
+    """POST the record once. A failure is logged and never retried."""
+    try:
+        response = requests.post(url, json=record, headers=HEADERS, timeout=TIMEOUT_SECONDS)
+        response.raise_for_status()
+    except Exception as error:  # A failed send must never stop the loop.
+        log_send_failure(record, describe_error("ai_endpoint", error))
 
 
 def run_once(config):
@@ -90,6 +118,8 @@ def run_once(config):
         save(record)
     except OSError as error:
         print(f"Could not write {OUTPUT_PATH}: {error}", file=sys.stderr, flush=True)
+    if config["ai_endpoint_url"]:
+        send_to_ai(record, config["ai_endpoint_url"])
 
 
 def parse_args():
@@ -116,13 +146,18 @@ def main():
     interval_seconds = interval * 60
 
     print(f"Fetching every {interval:g} minute(s). Press Ctrl+C to stop.", file=sys.stderr, flush=True)
+    if not config["ai_endpoint_url"]:
+        print("ai_endpoint_url is not set, so data will not be sent.", file=sys.stderr, flush=True)
     try:
         next_run = time.monotonic()
         while True:
             run_once(config)
             # Schedule from the previous start so request time doesn't add drift.
             next_run += interval_seconds
-            time.sleep(max(0, next_run - time.monotonic()))
+            now = time.monotonic()
+            if next_run < now:  # Fell behind (e.g. the PC slept): skip the missed runs.
+                next_run = now + interval_seconds
+            time.sleep(next_run - now)
     except KeyboardInterrupt:
         print("Stopped.", file=sys.stderr)
 

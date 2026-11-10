@@ -23,6 +23,12 @@ It fetches once right away, then repeats on the interval. Press Ctrl+C to stop.
 
 Settings are in `config.yaml`. If the file or a setting is missing, the built-in defaults are used.
 
+## Send data to an AI application
+
+Set `ai_endpoint_url` in `config.yaml`, for example `http://localhost:8000/weather`. After each fetch, the record is sent there once as an HTTP POST with a JSON body, using the same format as the terminal output. Leave the setting empty to turn sending off.
+
+Each attempt has a 10-second timeout and any 2xx response counts as success. A failed send is not retried. It is printed to the terminal and added to `data/send_failures.log`, and the record is still kept in `data/weather.jsonl`.
+
 ## Output notes
 
 If a source fails, its section is `null` and a short message is added to `errors`. The job keeps running and tries again at the next interval.
